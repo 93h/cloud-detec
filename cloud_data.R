@@ -100,3 +100,24 @@ corr2_ice <- images %>%
 library(leaps)
 subsets <- regsubsets(label ~ SD + NDAI + CORR + DF + CF + BF + AF + AN, data = images, nvmax = 3)
 summary(subsets)
+
+
+# Uncertain expert labels are removed from the dataset 
+certain_images <- images %>%
+  filter(label != 0) %>%
+  mutate(label = as.factor(label))
+
+#Split the data into training and test sets
+train <- certain_images %>% sample_frac(0.8)
+test <- certain_images %>% anti_join(train)
+
+
+library(mlbench)
+library(caret)
+library(randomForest)
+
+fit_rf = randomForest(label ~ NDAI + SD + CORR + DF + CF + BF + AF + AN, data = train, importance = TRUE)
+fit_rf_limited = randomForest(label ~ NDAI + SD + CORR + AN, data = train, importance = TRUE)
+
+importance(fit_rf)
+varImpPlot(fit_rf)
