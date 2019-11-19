@@ -1,18 +1,15 @@
 ---
-title: "Lab 4 - Cloud Data, Stat 215A, Fall 2019"
-author: 
-- "Aya Amanmyradova"
-- "Spencer Wilson"
-- "Ziyang Zhou"
-date: "`r format(Sys.time(), '%B %d, %Y')`"
-header-includes:
-   - \usepackage{float}
-output: 
-  pdf_document:
-    number_sections: true
+title: "lab4-Ziyang"
+author: "Ziyang Zhou"
+date: "11/18/2019"
+output: pdf_document
 editor_options: 
   chunk_output_type: console
 ---
+
+```{r}
+# setwd("~/Desktop/stat-215-a/lab4/")
+```
 
 ```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
 
@@ -39,13 +36,16 @@ knitr::opts_chunk$set(
 
 ```
 
-```{r load}
+```{r}
 # Get the data for three images
 path <- "data"
 image1 <- read.table(paste0('data/', 'image1.txt'), header = F)
 image2 <- read.table(paste0('data/', 'image2.txt'), header = F)
 image3 <- read.table(paste0('data/', 'image3.txt'), header = F)
-
+image <- c(rep("img1", nrow(image1)),
+           rep("img2", nrow(image2)),
+           rep("img3", nrow(image3)))
+  
 # Add informative column names.
 collabs <- c('y','x','label','NDAI','SD','CORR','DF','CF','BF','AF','AN')
 names(image1) <- collabs
@@ -54,237 +54,8 @@ names(image3) <- collabs
 
 # combine images into one dataframe
 images <- rbind(image1, image2, image3)
-
-## ziyang
 images$image <- image
 ```
-
-# Introduction
-
-
-
-
-# Exploratory Data Analysis
-
-## The Data
-
-The dataset consists of 3 images from the satellite, seen in Figure \ref{fig:labels}. For every pixel, we have x and y coordinates and expert labels (cloud = +1, not cloud = -1, unlabeled = 0), along with 8 other variables: NDAI, SD, CORR, DF, CF, BF, AF and AN. The last 5 variables are radiances obtained from cameras located at different angles. The first 3 measures are features derived from radiances to differentiate surface pixels from cloudy ones. NDAI is a normalized difference angular index that compares mean radiation collected from DF (zenith angle) and AN (nadir direction) cameras. SD is a standard deviation within groups of AN camera radiation measurements, and CORR is an average linear correlation of radiation measurements at different view angles. 
-
-```{r labels,  fig.cap = "Expert labels for the presence or absence of clouds, according to a map.", fig.width=8}
-
-# Plot the expert pixel-level classification of image 1
-p1 <- ggplot(image1) + 
-  geom_point(aes(x = x, y = y, color = factor(label))) + 
-  theme_bw() +
-  theme(axis.text = element_text(size = 5),
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        panel.border= element_blank(),
-        legend.text = element_text(size =10),
-        legend.title = element_text(size = 15))+
-  scale_color_manual(name = "Expert label", 
-                     values = c("#3182bd", "#9ecae1", "#deebf7"), 
-                     labels = c("Ice", "Unknown", "Clouds"))
-
-# Plot the expert pixel-level classification of image 2
-p2 <- ggplot(image2) + 
-  geom_point(aes(x = x, y = y, color = factor(label))) + 
-  theme_bw() +
-  theme(axis.text = element_text(size = 5),
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        panel.border= element_blank(),
-        legend.text = element_text(size =10),
-        legend.title = element_text(size = 15))+
-  scale_color_manual(name = "Expert label", 
-                     values = c("#3182bd", "#9ecae1", "#deebf7"), 
-                     labels = c("Ice", "Unknown", "Clouds"))
-
-# Plot the expert pixel-level classification of image 3
-p3 <- ggplot(image3) + 
-  geom_point(aes(x = x, y = y, color = factor(label))) + 
-  theme_bw() +
-  theme(axis.text = element_text(size = 5),
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        panel.border= element_blank(),
-        legend.text = element_text(size =10),
-        legend.title = element_text(size = 15))+
-  scale_color_manual(name = "Expert label", 
-                     values = c("#3182bd", "#9ecae1", "#deebf7"), 
-                     labels = c("Ice", "Unknown", "Clouds"))
-
-ggarrange(p1, p2, p3, ncol = 3, nrow = 1, common.legend = TRUE) 
-```
-
-## The Variables
-
-We explored the relationships between the radiances of different angles both visually and quantitatively. Due to limited report size, we only include scatterplots of the relationship between the radiances DF and CF, CF and BF, BF and AF, and AN and AF (see Figure \ref{fig:scatter}). Radiances from different angles had strong positive correlations for both cloud and non-cloud pixels. However, the correlations were even stronger for non-cloud pixels than cloud pixels. The average correlation between all pairwise radiances ror non-cloud pixels was 0.94, while the average correlation for the cloud pixels was 0.80. These findings agree with the scatterplots. Since the radiances from different angles have strong correlations for both cloud and non-cloud pixels, they can be redundant in modeling the presence of clouds.
-
-```{r corr, results='hide'}
-
-# Correlation matrix of radiances for cloud pixels
-corr_cloud <- images %>% 
-  filter(label == 1) %>% 
-  dplyr::select(DF, CF, BF, AF, AN) %>% 
-  cor()
-print(corr_cloud)
-mean(corr_cloud)
-# Correlation matrix of radiances for non-cloud pixels
-corr_ice <- images %>% 
-  filter(label == -1) %>% 
-  dplyr::select(DF, CF, BF, AF, AN) %>% 
-  cor()
-print(corr_ice)
-mean(corr_ice)
-# Correlation matrix of NDAI, SD, CORR for cloud pixels
-corr2_cloud <- images %>% 
-  filter(label == 1) %>% 
-  dplyr::select(NDAI, SD, CORR) %>% 
-  cor()
-print(corr2_cloud)
-mean(corr2_cloud)
-# Correlation matrix of radiances for non-cloud pixels
-corr2_ice <- images %>% 
-  filter(label == -1) %>% 
-  dplyr::select(NDAI, SD, CORR) %>% 
-  cor()
-print(corr2_ice)
-mean(corr2_ice)
-```
-```{r scatter, fig.cap = "Scatterplot of radiances.", fig.height=6}
-
-# give labels names
-images$lbl <- "Cloud"
-images$lbl[images$label == -1] <- "Ice"
-images$lbl[images$label == 0] <- "Unknown"
-
-# Convert labels from numeric to factor
-images$label <- as.factor(images$label)
-
-# Scatterplots of radiances
-p1 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = DF, y = CF, colour = lbl), size = 0.5, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-p2 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = CF, y = BF, colour = lbl), size = 0.5, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-p3 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = BF, y = AF, colour = lbl), size = 0.5, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-p4 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = AF, y = AN, colour = lbl), size = 0.5, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-ggarrange(p1, p2, p3, p4, ncol = 1, nrow = 4) 
-```
-
-We then explored the differences between cloud and non-cloud pixels based on NDAI, CORR, and SD. The pairwise correlations between the features for cloud pixels was 0.53 and for non-cloud ones was 0.62. These values agree with our visual observation from scatterplots (Figure \ref{fig:scatter2}). From the scatterplots, we can observe slight positive relationships between the variables for both the cloud and non-cloud pixels. Although, the relationships are weaker for cloud pixels. In addition, we can see that the variance in CORR and SD gets larger as NDAI increases.
-
-```{r scatter2, fig.cap = "Scatterplot of NDAI, CORR, and SD."}
-
-# Scatterplots of NDAI, CORR, SD
-p1 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = NDAI, y = CORR, colour = lbl), 
-             size = 0.75, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-p2 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = NDAI, y = SD, colour = lbl), 
-             size = 0.75, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-p3 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = CORR, y = SD, colour = lbl), 
-             size = 0.75, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-ggarrange(p1, p2, p3, ncol = 1, nrow = 3) 
-```
-
-#  Modeling
-
-## Feature Selection
-
-
-```{r features, eval=FALSE}
-# Uncertain expert labels are removed from the dataset 
-certain_images <- images %>%
-  filter(label != 0) %>%
-  mutate(label = as.factor(label))
-
-#Split the data into training and test sets
-train <- certain_images %>% sample_frac(0.8)
-test <- certain_images %>% anti_join(train)
-
-fit_rf = randomForest(label ~ NDAI + SD + CORR + DF + CF + BF + AF + AN, data = train, importance = TRUE)
-fit_rf_limited = randomForest(label ~ NDAI + SD + CORR + AN, data = train, importance = TRUE)
-
-importance(fit_rf)
-varImpPlot(fit_rf)
-```
-
-```{r boxplots, fig.cap="Boxplots of best predictors."}
-
-# Boxplots for ice and cloud
-#NDAI
-p1 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot(aes(x = lbl, y = NDAI)) + 
-  geom_boxplot() + xlab("Label")
-
-#SD
-p2 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot(aes(x = lbl, y = SD)) + 
-  geom_boxplot() + xlab("Label")
-
-#CORR
-p3 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot(aes(x = lbl, y = CORR)) + 
-  geom_boxplot() + xlab("Label")
-
-ggarrange(p1, p2, p3, ncol = 3, nrow = 1)
-```
-
-## Description and Assumptions of Classifiers
-
-## Assessment of fit of Classifiers
-
-## The Best Classifier
-
-## Post-hoc EDA
-
-# Conclusion
-
-
-
-
-
-
-
-
-
-
-# ziyang
 
 # Heuristics EDA
 ```{r}
