@@ -231,7 +231,6 @@ images %>%
 ## Data Splitting Method
 
 In order to compensate for violation of IID assumption, we suggest other methods of splitting data instead of doing a trivial 80-20 splitting on the entire data set. The first method is to sample based on label, i.e., 80-20 stratified sampling on labels for each image. The reason of doing so is because as Figure \ref{fig:dist} shows, the images are quite different and simply doing a 80-20 splitting on the entire data set would result in unbalanced labels among images. For example, it would be possible that less number of pixels with cloud in image 3 will be sampled becasue of unbalanced labels. The second method we suggest is block sampling, i.e., we divide the image into grids according to $(x,y)$ coordinates and do a 80-20 splitting within each block. Through this method, we would be able to ensure that small patches of clouds will also be captured in training data. In later analysis, we will employ both method and apply those on cross validation. Another possible way of splitting the data accounting their correlation structure is to find the center of clouds, cirle the contours, find the boundaries of each cloud, and sample within/without the boundaries accordingly. Since this share similar characteristics as label splitting, we will thus only implement the first two.
-
 ```{r split}
 ## function implementation for label splitting method
 label_splits <- function(data){
@@ -270,7 +269,7 @@ block_splits <- function(nrow, ncol, img){
       indx_test <- sample(nrow(img_chunk), 
                           size = floor(nrow(img_chunk) * 0.2))
       test_set <- img_chunk[indx_test, ]
-      train_set <- img_chunk[-indx_test_val, ]
+      train_set <- img_chunk[-indx_test, ]
       test_data <- rbind(test_data, test_set)
       train_data <- rbind(train_data, train_set)
     }
@@ -286,21 +285,46 @@ block_splits <- function(nrow, ncol, img){
 
 ## Feature Selection
 
-```{r features, eval=FALSE}
-# Uncertain expert labels are removed from the dataset 
-certain_images <- images %>%
-  filter(label != 0) %>%
+As we noted in our exploration of variables, the various radianace angles are highly correlated with one another. Consequently, it may not be necessary to include all five when constructing the classification model. We performed feature selection via random forests using a training test set containing all three images split by label. The three best features based on the mean decrease in accuracy are clear from the variable importance plot: NDAI, SD, and CORR. These results fit well with our expectations from inspecting the distribution of all features in Figure \ref{fig:dist}. NDAI is far and away the most salient feature, with SD and CORR trailing before all of the radiances. Still, the radiance values all had a clear distribution peak for non-cloud pixels that a model could exploit. The final feature space included NDAI, SD, CORR, and the most importance angular feature: AN.
+
+```{r features}
+# uncertain expert labels are removed from the dataset 
+image1 <- image1 %>% filter(label != 0)
+image2 <- image2 %>% filter(label != 0)
+image3 <- image3 %>% filter(label != 0)
+label_split_result_1 <- label_splits(image1)
+block_split_result_1 <- block_splits(10,10,image1)
+label_split_result_2 <- label_splits(image2)
+block_split_result_2 <- block_splits(10,10,image2)
+label_split_result_3 <- label_splits(image3)
+block_split_result_3 <- block_splits(10,10,image3)
+
+# split the data into training and test sets
+label_train <- rbind(label_split_result_1$train, 
+                     label_split_result_2$train, 
+                     label_split_result_3$train) %>%
   mutate(label = as.factor(label))
 
-#Split the data into training and test sets
-train <- certain_images %>% sample_frac(0.8)
-test <- certain_images %>% anti_join(train)
+label_test <- rbind(label_split_result_1$test, 
+                    label_split_result_2$test, 
+                    label_split_result_3$test) %>%
+  mutate(label = as.factor(label))
 
-fit_rf = randomForest(label ~ NDAI + SD + CORR + DF + CF + BF + AF + AN, data = train, importance = TRUE)
-fit_rf_limited = randomForest(label ~ NDAI + SD + CORR + AN, data = train, importance = TRUE)
+block_train <- rbind(block_split_result_1$train, 
+                     block_split_result_2$train, 
+                     block_split_result_3$train) %>%
+  mutate(label = as.factor(label))
+
+block_test <- rbind(block_split_result_1$test,
+                    block_split_result_2$test,
+                    block_split_result_3$test) %>%
+  mutate(label = as.factor(label))
+
+# run random forest for feature importance
+fit_rf = randomForest(label ~ NDAI + SD + CORR + DF + CF + BF + AF + AN, data = label_train, importance = TRUE)
 
 importance(fit_rf)
-varImpPlot(fit_rf)
+varImpPlot(fit_rf, main = 'Variable Importance', type = 1)
 ```
 
 ```{r boxplots-all, fig.cap="Boxplot Distribution of Labels among Features"}
@@ -335,6 +359,112 @@ We developed four classification models to test the presence of clouds: logistic
 \item \textbf{Quadratic discriminant analysis} is an extension of linear discriminant analysis, where the assumption of equal variance of classes is relaxed. However, it still assumes that features are drawn from multivariate Gaussian distribution and that p < n.
 \item \textbf{Naive Bayes} is a classifier based on Bayes' theorem. It has a strong asssumption of independence of features. We know this does not hold true in our data, and indeed, this classifier performed worst among all four. 
 \end{itemize}
+
+## Assessment of fit of Classifiers
+
+Classifier fit was assessed using k-fold cross-validation and the F1-score for evaluation. As the harmonic mean of precision and recall, the F1-score balances identifying clouds while not diminishing the value of the classifier by over application. With k set to five, we compared all of our classification models using both the label and block methods of training/ test splitting that were previously mentioned. Random forests are unmatched in their performance: their average score of 0.93 is 7% higher than the second best model. Still, there is no getting away from the fact that their structure necessitates a long amount of time to run. The other three predictors are much quicker, and among them QDA consistently outperforms both Logistic regression and Naive Bayes. If iteration or runtimes are critical, we would recommend QDA, but the best results are achieved with random forest. Results were consistent between both splitting techniques. Label splitting is faster and easier to implement than blocking, so is the one we recommend when using multiple datasets with uneven class distribution.
+
+```{r classifier_fit}
+accuracy_loss <- function(pred, actual){
+  return(mean(pred == actual))
+}
+
+precision_loss <- function(pred, actual){
+  return(sum(pred == actual & actual == 1)/sum(pred == 1))
+}
+
+recall_loss <- function(pred, actual){
+  return(sum(pred == actual & actual == 1)/sum(actual == 1))
+}
+
+f1_loss <- function(pred, actual){
+  p <- precision_loss(pred, actual)
+  r <- recall_loss(pred, actual)
+  return((2* p * r)/(p + r))
+}
+
+auc_loss <- function(pred, actual){
+  roc <- roc(actual, pred[, "1"])
+  plot(roc)
+  return(auc(roc))
+}
+
+CVBinaryClassifer <- function(classifier, features, labels, K, data, loss){
+  folds <- createFolds(data[,labels], k = K)
+  loss_vec <- c()
+  formula <- paste(paste(labels, "~"), paste(features, collapse = "+"))
+  
+  if (classifier == "logistic"){
+    for ( f in 1:length(folds) ){
+      model <- glm(formula, family = 'binomial', data = data[-folds[[f]], ])
+      pred_prob <- predict(model, data[folds[[f]], features])
+      pred <- ifelse(pred_prob > 0.5, 1, -1)
+      loss_vec[f] <- loss(pred, data[folds[[f]], labels])
+    }
+  }
+  
+  else if (classifier == "rf"){
+    for ( f in 1:length(folds) ){
+      model <- randomForest(as.formula(formula), data = data[-folds[[f]], ])
+      pred <- predict(model, data[folds[[f]], features])
+      pred_prod <- predict(model, data[folds[[f]], features], type = "prob")
+      loss_vec[f] = loss(pred, data[folds[[f]], labels])
+    }
+  }
+  
+  else if (classifier == "qda"){
+    for ( f in 1:length(folds) ){
+      model <- qda(as.formula(formula), data = data[-folds[[f]], ])
+      pred <- predict(model, data[folds[[f]], features])
+      pred_prod <- pred$posterior
+      pred <- pred$class
+      loss_vec[f] = loss(pred, data[folds[[f]], labels])
+    }
+  }
+  
+  else if (classifier == "nb"){
+    for ( f in 1:length(folds) ){
+      model <- NaiveBayes(as.formula(formula), data = data[-folds[[f]], ])
+      pred <- predict(model, data[folds[[f]], features])
+      pred_prod <- pred$posterior
+      pred <- pred$class
+      loss_vec[f] = loss(pred, data[folds[[f]], labels])
+    }
+  }
+  else{
+    print("Not a supported classifier")
+  }
+  loss_vec[K + 1] <- mean(loss_vec)
+  return(loss_vec)
+}
+
+
+models <- c('logistic', 'rf', 'qda', 'nb')
+features <- c('NDAI','SD','CORR','AN')
+
+# cv_list <- list()
+# for (m in 1:length(models)){
+#   cv_list[[m]] <- CVBinaryClassifer(models[m], features, 
+#                                     'label', 5, label_train, f1_loss)
+# }
+# 
+# label_df <- data.frame(c('CV1', 'CV2', 'CV3', 'CV4', 'CV5', 'Avg'), 
+#                        cv_list[[1]], cv_list[[2]], cv_list[[3]], cv_list[[4]])
+# colnames(label_df) <- c('Label/ Block', models)
+# 
+# for (m in 1:length(models)){
+#   cv_list[[m]] <- CVBinaryClassifer(models[m], features, 
+#                                     'label', 5, block_train, f1_loss)
+# }
+# 
+# block_df <- data.frame(c('CV1', 'CV2', 'CV3', 'CV4', 'CV5', 'Avg'), 
+#                        cv_list[[1]], cv_list[[2]], cv_list[[3]], cv_list[[4]])
+# colnames(block_df) <- c('Label/ Block', models)
+# 
+# df <- rbind(label_df, block_df)
+load('cvCompare.RData')
+knitr::kable(df, caption = 'Cross-Validation Comparison')
+```
 
 ## Assessment of fit of Classifiers
 
