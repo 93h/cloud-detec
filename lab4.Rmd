@@ -55,20 +55,23 @@ names(image3) <- collabs
 # combine images into one dataframe
 images <- rbind(image1, image2, image3)
 
-## ziyang
+# assign image names
+image <- c(rep("img1", nrow(image1)),
+           rep("img2", nrow(image2)),
+           rep("img3", nrow(image3)))
 images$image <- image
 ```
 
 # Introduction
 
-
-
+As global warming becomes more and more a reality, global climate models predict that surface air temperatures and atmospheric carbon dioxide levels will increase throughout this century. The Arctic is one of the regions where global warming has the most impact. The change in distribution of ice covered surfaces and clouds can further accelerate global warming. Being able to collect accurate data from satellites would immensely help to study cloud coverage. This became possible by the launch of Multiangle Imaging SpectroRadiometer (MISR) onboard the NASA Terra satellite in 1999, which takes radiation measurements at 9 view angles. 
+Therefore, the goal of this report is to model cloud detection based on measurements obtained from MISR. In order to achieve this, after proper exploratory data analysis we develop several classifiers, asses their fit using several metrics and choose the best classification model. For this study, we used logistic regression, random forest, quadratic discriminant analysis and naive bayes.
 
 # Exploratory Data Analysis
 
 ## The Data
 
-The dataset consists of 3 images from the satellite, seen in Figure \ref{fig:labels}. For every pixel, we have x and y coordinates and expert labels (cloud = +1, not cloud = -1, unlabeled = 0), along with 8 other variables: NDAI, SD, CORR, DF, CF, BF, AF and AN. The last 5 variables are radiances obtained from cameras located at different angles. The first 3 measures are features derived from radiances to differentiate surface pixels from cloudy ones. NDAI is a normalized difference angular index that compares mean radiation collected from DF (zenith angle) and AN (nadir direction) cameras. SD is a standard deviation within groups of AN camera radiation measurements, and CORR is an average linear correlation of radiation measurements at different view angles. 
+The dataset consists of 3 images from the satellite, seen in Figure \ref{fig:labels}. For every pixel, we have x and y coordinates and expert labels (cloud = +1, not cloud = -1, unlabeled = 0), along with 8 other variables: NDAI, SD, CORR, DF, CF, BF, AF and AN. The last 5 variables are radiances obtained from cameras located at different angles. The first 3 measures are features derived from radiances to differentiate surface pixels from cloudy ones. NDAI is a normalized difference angular index that compares mean radiation collected from DF (zenith angle) and AN (nadir direction) cameras. SD is a standard deviation within groups of nadir camera radiation measurements, and CORR is an average linear correlation of radiation measurements at different view angles. 
 
 ```{r labels,  fig.cap = "Expert labels for the presence or absence of clouds, according to a map.", fig.width=8}
 
@@ -117,7 +120,7 @@ p3 <- ggplot(image3) +
 ggarrange(p1, p2, p3, ncol = 3, nrow = 1, common.legend = TRUE) 
 ```
 
-As we can see from Figure \ref{fig:label_proportion}, image 2 has the most 1-label, while image 3 has the most 0-label (unlabeled), meaning that it contains the most unwanted data. For each image, there are no missing values. The typical IID assumption is broken in this case because the cloud appears in patches. This means that if one pixcel is clssified as cloudy, then the surrounding pixels are also highly likely to be cloudy. This geographic property causes correlation structure among pixels, so we would need to properly compensate for this violation of IID assumtpion in the processing stage.
+As we can see from Figure \ref{fig:label_proportion}, image 2 has the most 1-label, while image 3 has the most 0-label (unlabeled), meaning that it contains the most unwanted data. For each image, there are no missing values. The typical IID assumption is broken in this case because the cloud appears in patches. This means that if one pixel is clssified as cloudy, then the surrounding pixels are also highly likely to be cloudy. This geographic property causes correlation structure among pixels, so we would need to properly compensate for this violation of IID assumtpion in the processing stage.
 
 ```{r label_proportion, fig.cap="Proportion of Labels in Each Image"}
 ## summarizing data
@@ -155,111 +158,10 @@ grid.arrange(g1, g2, g3, ncol = 3,
 ```
 
 
-## The Variables
+## The Relationship Between Variables
 
-We explored the relationships between the radiances of different angles both visually and quantitatively. Due to limited report size, we only include scatterplots of the relationship between the radiances DF and CF, CF and BF, BF and AF, and AN and AF (see Figure \ref{fig:scatter}). Radiances from different angles had strong positive correlations for both cloud and non-cloud pixels. However, the correlations were even stronger for non-cloud pixels than cloud pixels. The average correlation between all pairwise radiances ror non-cloud pixels was 0.94, while the average correlation for the cloud pixels was 0.80. These findings agree with the scatterplots. Since the radiances from different angles have strong correlations for both cloud and non-cloud pixels, they can be redundant in modeling the presence of clouds.
-
-```{r corr, results='hide'}
-
-# Correlation matrix of radiances for cloud pixels
-corr_cloud <- images %>% 
-  filter(label == 1) %>% 
-  dplyr::select(DF, CF, BF, AF, AN) %>% 
-  cor()
-print(corr_cloud)
-mean(corr_cloud)
-# Correlation matrix of radiances for non-cloud pixels
-corr_ice <- images %>% 
-  filter(label == -1) %>% 
-  dplyr::select(DF, CF, BF, AF, AN) %>% 
-  cor()
-print(corr_ice)
-mean(corr_ice)
-# Correlation matrix of NDAI, SD, CORR for cloud pixels
-corr2_cloud <- images %>% 
-  filter(label == 1) %>% 
-  dplyr::select(NDAI, SD, CORR) %>% 
-  cor()
-print(corr2_cloud)
-mean(corr2_cloud)
-# Correlation matrix of radiances for non-cloud pixels
-corr2_ice <- images %>% 
-  filter(label == -1) %>% 
-  dplyr::select(NDAI, SD, CORR) %>% 
-  cor()
-print(corr2_ice)
-mean(corr2_ice)
-```
-```{r scatter, fig.cap = "Scatterplot of radiances.", fig.height=6}
-
-# give labels names
-images$lbl <- "Cloud"
-images$lbl[images$label == -1] <- "Ice"
-images$lbl[images$label == 0] <- "Unknown"
-
-# Convert labels from numeric to factor
-images$label <- as.factor(images$label)
-
-# Scatterplots of radiances
-p1 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = DF, y = CF, colour = lbl), size = 0.5, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-p2 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = CF, y = BF, colour = lbl), size = 0.5, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-p3 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = BF, y = AF, colour = lbl), size = 0.5, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-p4 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = AF, y = AN, colour = lbl), size = 0.5, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-ggarrange(p1, p2, p3, p4, ncol = 1, nrow = 4) 
-```
-
-We then explored the differences between cloud and non-cloud pixels based on NDAI, CORR, and SD. The pairwise correlations between the features for cloud pixels was 0.53 and for non-cloud ones was 0.62. These values agree with our visual observation from scatterplots (Figure \ref{fig:scatter2}). From the scatterplots, we can observe slight positive relationships between the variables for both the cloud and non-cloud pixels. Although, the relationships are weaker for cloud pixels. In addition, we can see that the variance in CORR and SD gets larger as NDAI increases.
-
-```{r scatter2, fig.cap = "Scatterplot of NDAI, CORR, and SD."}
-
-# Scatterplots of NDAI, CORR, SD
-p1 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = NDAI, y = CORR, colour = lbl), 
-             size = 0.75, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-p2 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = NDAI, y = SD, colour = lbl), 
-             size = 0.75, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-p3 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot() + 
-  geom_point(aes(x = CORR, y = SD, colour = lbl), 
-             size = 0.75, alpha = 0.2) +
-  facet_wrap( ~ lbl, ncol=2) + theme(legend.position="none")
-
-ggarrange(p1, p2, p3, ncol = 1, nrow = 3) 
-```
-
-# More EDA
-
-The pair-wise relationship between feature is shown in Figure \ref{fig:corr}. We see that the five angular features, most certainly, are highly correlated with one anohter. Other features are moderately related to each other in either a positive or a negative way but there is no clear pattern of any relationship. To further understand the features, we made a overlaying label distribution plot for each feature in Figure \ref{fig:dist}. We observe that the label distributions are very similar among AF, AN, BF, CF but quite divergent in CORR, log(SD), and NDAI. This is not surpursing since CORR, SD, and NDAI are the features specifically created for this classification task, as mentioned in the original paper Yu (2008). We performed a log-transformation on SD since its original distribution is highly skewed to the right. Most of the distributions here are bell-shaped. Specifically for NDAI, we observe that the distributions for 1-label and -1-label almost have no overlap, and this thus suggests NDAI could be a good predictive featrue in this task.
+We explored the relationships between the variables both visually and quantitatively. The pair-wise relationships between features is shown in Figure \ref{fig:corr}. We see that the five angular features, most certainly, are highly correlated with one anohter. However, the correlations were even stronger for non-cloud pixels than cloud pixels. The average correlation between all pair-wise radiances for non-cloud pixels was 0.94, while the average correlation for the cloud pixels was 0.80. Other features are moderately related to each other in either a positive or a negative way but there is no clear pattern of any relationship. The average correlation between NDAI, SD and CORR for cloud pixels was 0.53 and for non-cloud ones was 0.62. 
+To further understand the features, we made a overlaying label distribution plot for each feature in Figure \ref{fig:dist}. We observe that the label distributions are very similar among AF, AN, BF, CF but quite divergent in CORR, log(SD), and NDAI. This is not surpursing since CORR, SD, and NDAI are the features specifically created for this classification task, as mentioned in the original paper Yu (2008). We performed a log-transformation on SD since its original distribution is highly skewed to the right. Most of the distributions here are bell-shaped. Specifically for NDAI, we observe that the distributions for 1-label and -1-label almost have no overlap, thus this suggests NDAI could be a good predictive feature in this task. These findings suggest that NDAI, SD and CORR might be good predictors of presense of clouds, while radiance measures are highly correlated and using only one of them is sufficient for prediction.
 
 ```{r corr, fig.cap="Correlation Plot among Potential Features"}
 ## correlation plot
@@ -294,6 +196,35 @@ images %>%
   labs(x = "")
 ```
 
+## This is a slight modified version of above plot with names given to labels and unknown removed from plot for clarity - Aya
+
+```{r}
+# give labels names
+images$Labels <- "Cloud"
+images$Labels[images$label == -1] <- "Ice"
+images$Labels[images$label == 0] <- "Unknown"
+
+images %>%
+  filter(Labels != "Unknown") %>%
+  gather(features, 
+         key = "Variable", value = "Value") %>%
+  ggplot() + 
+  geom_density(aes(x = Value, group = Labels,
+                   color = Labels, fill = Labels), 
+             color = "black", alpha = .7) +
+  facet_wrap(Variable ~., 
+             scales = "free",
+             nrow = 2) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(size = rel(1.2)),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.title.y = element_text(size = 12, face = "bold")
+  ) + 
+  labs(x = "")
+
+```
+
 
 #  Modeling
 
@@ -301,7 +232,7 @@ images %>%
 
 In order to compensate for violation of IID assumption, we suggest other methods of splitting data instead of doing a trivial 80-20 splitting on the entire data set. The first method is to sample based on label, i.e., 80-20 stratified sampling on labels for each image. The reason of doing so is because as Figure \ref{fig:dist} shows, the images are quite different and simply doing a 80-20 splitting on the entire data set would result in unbalanced labels among images. For example, it would be possible that less number of pixels with cloud in image 3 will be sampled becasue of unbalanced labels. The second method we suggest is block sampling, i.e., we divide the image into grids according to $(x,y)$ coordinates and do a 80-20 splitting within each block. Through this method, we would be able to ensure that small patches of clouds will also be captured in training data. In later analysis, we will employ both method and apply those on cross validation. Another possible way of splitting the data accounting their correlation structure is to find the center of clouds, cirle the contours, find the boundaries of each cloud, and sample within/without the boundaries accordingly. Since this share similar characteristics as label splitting, we will thus only implement the first two.
 
-```{r}
+```{r split}
 ## function implementation for label splitting method
 label_splits <- function(data){
   res <- list()
@@ -372,39 +303,15 @@ importance(fit_rf)
 varImpPlot(fit_rf)
 ```
 
-```{r boxplots, fig.cap="Boxplots of best predictors."}
-
-# Boxplots for ice and cloud
-#NDAI
-p1 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot(aes(x = lbl, y = NDAI)) + 
-  geom_boxplot() + xlab("Label")
-
-#SD
-p2 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot(aes(x = lbl, y = SD)) + 
-  geom_boxplot() + xlab("Label")
-
-#CORR
-p3 <- images %>% 
-  filter(label != 0) %>% 
-  ggplot(aes(x = lbl, y = CORR)) + 
-  geom_boxplot() + xlab("Label")
-
-ggarrange(p1, p2, p3, ncol = 3, nrow = 1)
-```
-
 ```{r boxplots-all, fig.cap="Boxplot Distribution of Labels among Features"}
 images %>%
   filter(label != 0) %>%
   gather(features,
          key = "Variable", value = "Value") %>%
   ggplot() + 
-  geom_boxplot(aes(x = label, 
+  geom_boxplot(aes(x = Labels, 
                    y = Value,
-                   color= label)) + 
+                   color= Labels)) + 
   facet_wrap(Variable ~., 
              scales = "free",
              nrow = 2) +
@@ -420,6 +327,15 @@ images %>%
 
 ## Description and Assumptions of Classifiers
 
+We developed four classification models to test the presence of clouds: logistic regression, random forest, quadratic discriminant analysis, and naive Bayes. We included 4 features: NDAI, SD, CORR and AN, the choice of which was justified above. 
+
+\begin{itemize}
+\item \textbf{Logistic regression} models binary dependent variable. It assumes that there is no multicollinearity within features. It is obvious that this assumption is violated in the data, especially in regards to the different radiance angles. Therefore, we chose not to include all radiance measures. Since our aim is prediction and not inference we can be lenient with this assumption. It also assumes independence of error terms with features, and linearity of features with log odds.
+\item \textbf{Random forest} consists of a large number of decision trees that operate as an ensemble. Each tree in the random forest outputs a class prediction, and the class with most votes becomes the model's prediction. It does not assume any formal distribution and is non-parametric.
+\item \textbf{Quadratic discriminant analysis} is an extension of linear discriminant analysis, where the assumption of equal variance of classes is relaxed. However, it still assumes that features are drawn from multivariate Gaussian distribution and that p < n.
+\item \textbf{Naive Bayes} is a classifier based on Bayes' theorem. It has a strong asssumption of independence of features. We know this does not hold true in our data, and indeed, this classifier performed worst among all four. 
+\end{itemize}
+
 ## Assessment of fit of Classifiers
 
 ## The Best Classifier
@@ -427,6 +343,7 @@ images %>%
 ## Post-hoc EDA
 
 # Conclusion
+
 
 
 
