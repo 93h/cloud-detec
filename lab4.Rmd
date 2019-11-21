@@ -117,6 +117,44 @@ p3 <- ggplot(image3) +
 ggarrange(p1, p2, p3, ncol = 3, nrow = 1, common.legend = TRUE) 
 ```
 
+As we can see from Figure \ref{fig:label_proportion}, image 2 has the most 1-label, while image 3 has the most 0-label (unlabeled), meaning that it contains the most unwanted data. For each image, there are no missing values. The typical IID assumption is broken in this case because the cloud appears in patches. This means that if one pixcel is clssified as cloudy, then the surrounding pixels are also highly likely to be cloudy. This geographic property causes correlation structure among pixels, so we would need to properly compensate for this violation of IID assumtpion in the processing stage.
+
+```{r label_proportion, fig.cap="Proportion of Labels in Each Image"}
+## summarizing data
+percentage_dat <- images %>%
+  group_by(image, label) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+  
+g1 <- percentage_dat %>%
+  filter(image == "img1") %>%
+  ggplot(aes(x = label, y = freq)) +
+  geom_bar(stat="identity", color="black", fill="lightskyblue3") +
+  ylab("Proportion") + 
+  ylim(0,0.6) + 
+  theme_bw()
+
+g2 <- percentage_dat %>%
+  filter(image == "img2") %>%
+  ggplot(aes(x = label, y = freq)) +
+  geom_bar(stat="identity", color="black", fill="lightskyblue3") +
+  ylab("Proportion") +
+  ylim(0,0.6) + 
+  theme_bw()
+  
+g3 <- percentage_dat %>%
+  filter(image == "img3") %>%
+  ggplot(aes(x = label, y = freq)) +
+  geom_bar(stat="identity", color="black", fill="lightskyblue3") +
+  ylab("Proportion") +
+  ylim(0,0.6) + 
+  theme_bw()
+  
+grid.arrange(g1, g2, g3, ncol = 3,
+             gp = gpar(fontsize = 16))
+```
+
+
 ## The Variables
 
 We explored the relationships between the radiances of different angles both visually and quantitatively. Due to limited report size, we only include scatterplots of the relationship between the radiances DF and CF, CF and BF, BF and AF, and AN and AF (see Figure \ref{fig:scatter}). Radiances from different angles had strong positive correlations for both cloud and non-cloud pixels. However, the correlations were even stronger for non-cloud pixels than cloud pixels. The average correlation between all pairwise radiances ror non-cloud pixels was 0.94, while the average correlation for the cloud pixels was 0.80. These findings agree with the scatterplots. Since the radiances from different angles have strong correlations for both cloud and non-cloud pixels, they can be redundant in modeling the presence of clouds.
@@ -219,10 +257,103 @@ p3 <- images %>%
 ggarrange(p1, p2, p3, ncol = 1, nrow = 3) 
 ```
 
+# More EDA
+
+The pair-wise relationship between feature is shown in Figure \ref{fig:corr}. We see that the five angular features, most certainly, are highly correlated with one anohter. Other features are moderately related to each other in either a positive or a negative way but there is no clear pattern of any relationship. To further understand the features, we made a overlaying label distribution plot for each feature in Figure \ref{fig:dist}. We observe that the label distributions are very similar among AF, AN, BF, CF but quite divergent in CORR, log(SD), and NDAI. This is not surpursing since CORR, SD, and NDAI are the features specifically created for this classification task, as mentioned in the original paper Yu (2008). We performed a log-transformation on SD since its original distribution is highly skewed to the right. Most of the distributions here are bell-shaped. Specifically for NDAI, we observe that the distributions for 1-label and -1-label almost have no overlap, and this thus suggests NDAI could be a good predictive featrue in this task.
+
+```{r corr, fig.cap="Correlation Plot among Potential Features"}
+## correlation plot
+corrplot.mixed(cor(images[,c(-1, -2, -3, -12, -13)]))
+```
+
+```{r dist, fig.cap="Overlaying Distribution of Labels among Features"}
+## log transformation of SD b/c it is highly skewed
+images$logSD <- log(images$SD + 1)
+
+## initial feature definitions
+features <- c('NDAI','logSD','CORR','DF','CF','BF','AF','AN')
+
+## distribution plots
+images$label <- factor(images$label)
+images %>%
+  gather(features, 
+         key = "Variable", value = "Value") %>%
+  ggplot() + 
+  geom_density(aes(x = Value, group = label,
+                   color = label, fill = label), 
+             color = "black", alpha = .7) +
+  facet_wrap(Variable ~., 
+             scales = "free",
+             nrow = 2) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(size = rel(1.2)),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.title.y = element_text(size = 12, face = "bold")
+  ) + 
+  labs(x = "")
+```
+
+
 #  Modeling
 
-## Feature Selection
+## Data Splitting Method
 
+In order to compensate for violation of IID assumption, we suggest other methods of splitting data instead of doing a trivial 80-20 splitting on the entire data set. The first method is to sample based on label, i.e., 80-20 stratified sampling on labels for each image. The reason of doing so is because as Figure \ref{fig:dist} shows, the images are quite different and simply doing a 80-20 splitting on the entire data set would result in unbalanced labels among images. For example, it would be possible that less number of pixels with cloud in image 3 will be sampled becasue of unbalanced labels. The second method we suggest is block sampling, i.e., we divide the image into grids according to $(x,y)$ coordinates and do a 80-20 splitting within each block. Through this method, we would be able to ensure that small patches of clouds will also be captured in training data. In later analysis, we will employ both method and apply those on cross validation. Another possible way of splitting the data accounting their correlation structure is to find the center of clouds, cirle the contours, find the boundaries of each cloud, and sample within/without the boundaries accordingly. Since this share similar characteristics as label splitting, we will thus only implement the first two.
+
+```{r}
+## function implementation for label splitting method
+label_splits <- function(data){
+  res <- list()
+  indx <- createDataPartition(data$label, p = 0.8, 
+                              list = FALSE, 
+                              times = 1)
+  res$train <- data[indx, ]
+  res$test <-  data[-indx, ]
+  return(res)
+}
+
+## function implementation for block splitting method
+block_splits <- function(nrow, ncol, img){
+  res <- list()
+  train_data <- data.frame()
+  val_data <- data.frame()
+  test_data <- data.frame()
+  min_y_cor <- min(img$y)
+  min_x_cor <- min(img$x)
+  max_y_cor <- max(img$y)
+  max_x_cor <- max(img$x)
+  row_grid <- seq(min_y_cor, 
+                  max_y_cor + 1,
+                  (max_y_cor + 1 - min_y_cor)/(nrow - 1))
+  col_grid <- seq(min_x_cor,
+                  max_x_cor + 1,
+                  (max_x_cor + 1 - min_x_cor)/(ncol - 1))
+  
+  for (i in 1:length(row_grid) ){
+    for (j in 1:length(col_grid) ){
+      img_chunk <- img[img$y >= row_grid[i] & 
+                         img$y < row_grid[i + 1] & 
+                         img$x >= col_grid[j] & 
+                         img$x < col_grid[j + 1], ]
+      indx_test <- sample(nrow(img_chunk), 
+                          size = floor(nrow(img_chunk) * 0.2))
+      test_set <- img_chunk[indx_test, ]
+      train_set <- img_chunk[-indx_test_val, ]
+      test_data <- rbind(test_data, test_set)
+      train_data <- rbind(train_data, train_set)
+    }
+  }
+  
+  res$training <- train_data
+  res$test <- test_data
+  res$row_grid <- row_grid
+  res$col_grid <- col_grid
+  return(res)
+}
+```
+
+## Feature Selection
 
 ```{r features, eval=FALSE}
 # Uncertain expert labels are removed from the dataset 
@@ -264,6 +395,28 @@ p3 <- images %>%
 
 ggarrange(p1, p2, p3, ncol = 3, nrow = 1)
 ```
+
+```{r boxplots-all, fig.cap="Boxplot Distribution of Labels among Features"}
+images %>%
+  filter(label != 0) %>%
+  gather(features,
+         key = "Variable", value = "Value") %>%
+  ggplot() + 
+  geom_boxplot(aes(x = label, 
+                   y = Value,
+                   color= label)) + 
+  facet_wrap(Variable ~., 
+             scales = "free",
+             nrow = 2) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(size = rel(1.2)),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.title.y = element_text(size = 12, face = "bold")
+  ) + 
+  labs(x = "") 
+```
+
 
 ## Description and Assumptions of Classifiers
 
