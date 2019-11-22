@@ -1,0 +1,607 @@
+---
+title: "Lab 4 - Cloud Data, Stat 215A, Fall 2019"
+author: 
+- "Aya Amanmyradova"
+- "Spencer Wilson"
+- "Ziyang Zhou"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+header-includes:
+   - \usepackage{float}
+output: 
+  pdf_document:
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+
+# load in useful packages
+library(tidyverse)
+library(ggpubr)
+library(mlbench)
+library(caret)
+library(randomForest)
+library(pROC)
+library(MASS)
+library(klaR)
+library("gridExtra")
+library("grid")
+library("corrplot")
+
+# set default knitr chunks
+knitr::opts_chunk$set(
+  echo = FALSE,  # don't print the code chunk
+  warning = FALSE,  # don't print warnings
+  message = FALSE,  # don't print messages
+  fig.width = 6,  # set default width of figures
+  fig.height = 4,  # set default height of figures
+  fig.align = "center",  # align figure in center
+  fig.pos = "H",  # plot figure at the exact location of the code chunk
+  cache = FALSE)  # don't cache results
+
+```
+
+```{r load}
+# Get the data for three images
+path <- "data"
+image1 <- read.table(paste0('data/', 'image1.txt'), header = F)
+image2 <- read.table(paste0('data/', 'image2.txt'), header = F)
+image3 <- read.table(paste0('data/', 'image3.txt'), header = F)
+
+# Add informative column names.
+collabs <- c('y','x','label','NDAI','SD','CORR','DF','CF','BF','AF','AN')
+names(image1) <- collabs
+names(image2) <- collabs
+names(image3) <- collabs
+
+# combine images into one dataframe
+images <- rbind(image1, image2, image3)
+
+# assign image names
+image <- c(rep("img1", nrow(image1)),
+           rep("img2", nrow(image2)),
+           rep("img3", nrow(image3)))
+images$image <- image
+```
+
+# Introduction
+
+As global warming becomes more and more a reality, global climate models predict that surface air temperatures and atmospheric carbon dioxide levels will increase throughout this century. The Arctic is one of the regions where global warming has the most impact. The change in distribution of ice covered surfaces and clouds can further accelerate global warming. Being able to collect accurate data from satellites would immensely help to study cloud coverage. This became possible by the launch of Multiangle Imaging SpectroRadiometer (MISR) onboard the NASA Terra satellite in 1999, which takes radiation measurements at 9 view angles. 
+Therefore, the goal of this report is to model cloud detection based on measurements obtained from MISR. In order to achieve this, after proper exploratory data analysis we develop several classifiers, asses their fit using several metrics and choose the best classification model. For this study, we used logistic regression, random forest, quadratic discriminant analysis and naive bayes.
+
+# Exploratory Data Analysis
+
+## The Data
+
+The dataset consists of 3 images from the satellite, seen in Figure \ref{fig:labels}. For every pixel, we have x and y coordinates and expert labels (cloud = +1, not cloud = -1, unlabeled = 0), along with 8 other variables: NDAI, SD, CORR, DF, CF, BF, AF and AN. The last 5 variables are radiances obtained from cameras located at different angles. The first 3 measures are features derived from radiances to differentiate surface pixels from cloudy ones. NDAI is a normalized difference angular index that compares mean radiation collected from DF (zenith angle) and AN (nadir direction) cameras. SD is a standard deviation within groups of nadir camera radiation measurements, and CORR is an average linear correlation of radiation measurements at different view angles. 
+
+```{r labels,  fig.cap = "Expert labels for the presence or absence of clouds, according to a map.", fig.width=8}
+
+# Plot the expert pixel-level classification of image 1
+p1 <- ggplot(image1) + 
+  geom_point(aes(x = x, y = y, color = factor(label))) + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border= element_blank(),
+        legend.text = element_text(size =10),
+        legend.title = element_text(size = 15))+
+  scale_color_manual(name = "Expert label", 
+                     values = c("#3182bd", "#9ecae1", "#deebf7"), 
+                     labels = c("Ice", "Unknown", "Clouds"))
+
+# Plot the expert pixel-level classification of image 2
+p2 <- ggplot(image2) + 
+  geom_point(aes(x = x, y = y, color = factor(label))) + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border= element_blank(),
+        legend.text = element_text(size =10),
+        legend.title = element_text(size = 15))+
+  scale_color_manual(name = "Expert label", 
+                     values = c("#3182bd", "#9ecae1", "#deebf7"), 
+                     labels = c("Ice", "Unknown", "Clouds"))
+
+# Plot the expert pixel-level classification of image 3
+p3 <- ggplot(image3) + 
+  geom_point(aes(x = x, y = y, color = factor(label))) + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border= element_blank(),
+        legend.text = element_text(size =10),
+        legend.title = element_text(size = 15))+
+  scale_color_manual(name = "Expert label", 
+                     values = c("#3182bd", "#9ecae1", "#deebf7"), 
+                     labels = c("Ice", "Unknown", "Clouds"))
+
+ggarrange(p1, p2, p3, ncol = 3, nrow = 1, common.legend = TRUE) 
+```
+
+As we can see from Figure \ref{fig:label_proportion}, image 2 has the most 1-label, while image 3 has the most 0-label (unlabeled), meaning that it contains the most unwanted data. For each image, there are no missing values. The typical IID assumption is broken in this case because the cloud appears in patches. This means that if one pixel is clssified as cloudy, then the surrounding pixels are also highly likely to be cloudy. This geographic property causes correlation structure among pixels, so we would need to properly compensate for this violation of IID assumtpion in the processing stage.
+
+```{r label_proportion, fig.cap="Proportion of Labels in Each Image"}
+## summarizing data
+percentage_dat <- images %>%
+  group_by(image, label) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+  
+g1 <- percentage_dat %>%
+  filter(image == "img1") %>%
+  ggplot(aes(x = label, y = freq)) +
+  geom_bar(stat="identity", color="black", fill="lightskyblue3") +
+  ylab("Proportion") + 
+  ylim(0,0.6) + 
+  theme_bw()
+
+g2 <- percentage_dat %>%
+  filter(image == "img2") %>%
+  ggplot(aes(x = label, y = freq)) +
+  geom_bar(stat="identity", color="black", fill="lightskyblue3") +
+  ylab("Proportion") +
+  ylim(0,0.6) + 
+  theme_bw()
+  
+g3 <- percentage_dat %>%
+  filter(image == "img3") %>%
+  ggplot(aes(x = label, y = freq)) +
+  geom_bar(stat="identity", color="black", fill="lightskyblue3") +
+  ylab("Proportion") +
+  ylim(0,0.6) + 
+  theme_bw()
+  
+ggarrange(g1, g2, g3, ncol = 3, nrow = 1)
+```
+
+
+## The Relationship Between Variables
+
+We explored the relationships between the variables both visually and quantitatively. The pair-wise relationships between features is shown in Figure \ref{fig:corr}. We see that the five angular features, most certainly, are highly correlated with one anohter. However, the correlations were even stronger for non-cloud pixels than cloud pixels. The average correlation between all pair-wise radiances for non-cloud pixels was 0.94, while the average correlation for the cloud pixels was 0.80. Other features are moderately related to each other in either a positive or a negative way but there is no clear pattern of any relationship. The average correlation between NDAI, SD and CORR for cloud pixels was 0.53 and for non-cloud ones was 0.62. 
+To further understand the features, we made a overlaying label distribution plot for each feature in Figure \ref{fig:dist}. We observe that the label distributions are very similar among AF, AN, BF, CF but quite divergent in CORR, log(SD), and NDAI. This is not surpursing since CORR, SD, and NDAI are the features specifically created for this classification task, as mentioned in the original paper Yu (2008). We performed a log-transformation on SD since its original distribution is highly skewed to the right. Most of the distributions here are bell-shaped. Specifically for NDAI, we observe that the distributions for 1-label and -1-label almost have no overlap, thus this suggests NDAI could be a good predictive feature in this task. These findings suggest that NDAI, SD and CORR might be good predictors of presense of clouds, while radiance measures are highly correlated and using only one of them is sufficient for prediction.
+
+```{r corr, fig.cap="Correlation Plot among Potential Features"}
+## correlation plot
+corrplot.mixed(cor(images[,c(-1, -2, -3, -12, -13)]))
+```
+
+```{r dist, fig.cap="Overlaying Distribution of Labels among Features"}
+## log transformation of SD b/c it is highly skewed
+images$logSD <- log(images$SD + 1)
+
+## initial feature definitions
+features <- c('NDAI','logSD','CORR','DF','CF','BF','AF','AN')
+
+## distribution plots
+images$label <- factor(images$label)
+images %>%
+  gather(features, 
+         key = "Variable", value = "Value") %>%
+  ggplot() + 
+  geom_density(aes(x = Value, group = label,
+                   color = label, fill = label), 
+             color = "black", alpha = .7) +
+  facet_wrap(Variable ~., 
+             scales = "free",
+             nrow = 2) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(size = rel(1.2)),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.title.y = element_text(size = 12, face = "bold")
+  ) + 
+  labs(x = "")
+```
+
+## This is a slight modified version of above plot with names given to labels and unknown removed from plot for clarity - Aya
+
+```{r}
+# give labels names
+images$Labels <- "Cloud"
+images$Labels[images$label == -1] <- "Ice"
+images$Labels[images$label == 0] <- "Unknown"
+
+images %>%
+  filter(Labels != "Unknown") %>%
+  gather(features, 
+         key = "Variable", value = "Value") %>%
+  ggplot() + 
+  geom_density(aes(x = Value, group = Labels,
+                   color = Labels, fill = Labels), 
+             color = "black", alpha = .7) +
+  facet_wrap(Variable ~., 
+             scales = "free",
+             nrow = 2) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(size = rel(1.2)),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.title.y = element_text(size = 12, face = "bold")
+  ) + 
+  labs(x = "")
+
+```
+
+
+#  Modeling
+
+## Data Splitting Method
+
+In order to compensate for violation of IID assumption, we suggest other methods of splitting data instead of doing a trivial 80-20 splitting on the entire data set. The first method is to sample based on label, i.e., 80-20 stratified sampling on labels for each image. The reason of doing so is because as Figure \ref{fig:dist} shows, the images are quite different and simply doing a 80-20 splitting on the entire data set would result in unbalanced labels among images. For example, it would be possible that less number of pixels with cloud in image 3 will be sampled becasue of unbalanced labels. The second method we suggest is block sampling, i.e., we divide the image into grids according to $(x,y)$ coordinates and do a 80-20 splitting within each block. Through this method, we would be able to ensure that small patches of clouds will also be captured in training data. In later analysis, we will employ both method and apply those on cross validation. Another possible way of splitting the data accounting their correlation structure is to find the center of clouds, cirle the contours, find the boundaries of each cloud, and sample within/without the boundaries accordingly. Since this share similar characteristics as label splitting, we will thus only implement the first two.
+```{r split}
+## function implementation for label splitting method
+label_splits <- function(data){
+  res <- list()
+  indx <- createDataPartition(data$label, p = 0.8, 
+                              list = FALSE, 
+                              times = 1)
+  res$train <- data[indx, ]
+  res$test <-  data[-indx, ]
+  return(res)
+}
+
+## function implementation for block splitting method
+block_splits <- function(nrow, ncol, img){
+  res <- list()
+  train_data <- data.frame()
+  val_data <- data.frame()
+  test_data <- data.frame()
+  min_y_cor <- min(img$y)
+  min_x_cor <- min(img$x)
+  max_y_cor <- max(img$y)
+  max_x_cor <- max(img$x)
+  row_grid <- seq(min_y_cor, 
+                  max_y_cor + 1,
+                  (max_y_cor + 1 - min_y_cor)/(nrow - 1))
+  col_grid <- seq(min_x_cor,
+                  max_x_cor + 1,
+                  (max_x_cor + 1 - min_x_cor)/(ncol - 1))
+  
+  for (i in 1:length(row_grid) ){
+    for (j in 1:length(col_grid) ){
+      img_chunk <- img[img$y >= row_grid[i] & 
+                         img$y < row_grid[i + 1] & 
+                         img$x >= col_grid[j] & 
+                         img$x < col_grid[j + 1], ]
+      indx_test <- sample(nrow(img_chunk), 
+                          size = floor(nrow(img_chunk) * 0.2))
+      test_set <- img_chunk[indx_test, ]
+      train_set <- img_chunk[-indx_test, ]
+      test_data <- rbind(test_data, test_set)
+      train_data <- rbind(train_data, train_set)
+    }
+  }
+  
+  res$training <- train_data
+  res$test <- test_data
+  res$row_grid <- row_grid
+  res$col_grid <- col_grid
+  return(res)
+}
+```
+
+## Feature Selection
+
+As we noted in our exploration of variables, the various radianace angles are highly correlated with one another. Consequently, it may not be necessary to include all five when constructing the classification model. We performed feature selection via random forests using a training test set containing all three images split by label. The three best features based on the mean decrease in accuracy are clear from the variable importance plot: NDAI, SD, and CORR. These results fit well with our expectations from inspecting the distribution of all features in Figure \ref{fig:dist}. NDAI is far and away the most salient feature, with SD and CORR trailing before all of the radiances. Still, the radiance angles all had a notable range with little overlap where the density of non-cloud pixels spikes that a model could exploit. The final feature space included NDAI, SD, CORR, and the most importance angular feature: AN.
+
+```{r features}
+# uncertain expert labels are removed from the dataset 
+image1 <- image1 %>% filter(label != 0)
+image2 <- image2 %>% filter(label != 0)
+image3 <- image3 %>% filter(label != 0)
+label_split_result_1 <- label_splits(image1)
+block_split_result_1 <- block_splits(10,10,image1)
+label_split_result_2 <- label_splits(image2)
+block_split_result_2 <- block_splits(10,10,image2)
+label_split_result_3 <- label_splits(image3)
+block_split_result_3 <- block_splits(10,10,image3)
+
+# split the data into training and test sets
+label_train <- rbind(label_split_result_1$train, 
+                     label_split_result_2$train, 
+                     label_split_result_3$train) %>%
+  mutate(label = as.factor(label))
+
+label_test <- rbind(label_split_result_1$test, 
+                    label_split_result_2$test, 
+                    label_split_result_3$test) %>%
+  mutate(label = as.factor(label))
+
+block_train <- rbind(block_split_result_1$train, 
+                     block_split_result_2$train, 
+                     block_split_result_3$train) %>%
+  mutate(label = as.factor(label))
+
+block_test <- rbind(block_split_result_1$test,
+                    block_split_result_2$test,
+                    block_split_result_3$test) %>%
+  mutate(label = as.factor(label))
+
+# run random forest for feature importance
+fit_rf = randomForest(label ~ NDAI + SD + CORR + DF + CF + BF + AF + AN, data = label_train, importance = TRUE)
+
+importance(fit_rf)
+varImpPlot(fit_rf, main = 'Variable Importance', type = 1)
+```
+
+```{r boxplots-all, fig.cap="Boxplot Distribution of Labels among Features"}
+images %>%
+  filter(label != 0) %>%
+  gather(features,
+         key = "Variable", value = "Value") %>%
+  ggplot() + 
+  geom_boxplot(aes(x = Labels, 
+                   y = Value,
+                   color= Labels)) + 
+  facet_wrap(Variable ~., 
+             scales = "free",
+             nrow = 2) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(size = rel(1.2)),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.title.y = element_text(size = 12, face = "bold")
+  ) + 
+  labs(x = "") 
+```
+
+
+## Description and Assumptions of Classifiers
+
+We developed four classification models to test the presence of clouds: logistic regression, random forest, quadratic discriminant analysis, and naive Bayes. We included 4 features: NDAI, SD, CORR and AN, the choice of which was justified above. 
+
+\begin{itemize}
+\item \textbf{Logistic regression} models binary dependent variable. It assumes that there is no multicollinearity within features. It is obvious that this assumption is violated in the data, especially in regards to the different radiance angles. Therefore, we chose not to include all radiance measures. Since our aim is prediction and not inference we can be lenient with this assumption. It also assumes independence of error terms with features, and linearity of features with log odds.
+\item \textbf{Random forest} consists of a large number of decision trees that operate as an ensemble. Each tree in the random forest outputs a class prediction, and the class with most votes becomes the model's prediction. It does not assume any formal distribution and is non-parametric.
+\item \textbf{Quadratic discriminant analysis} is an extension of linear discriminant analysis, where the assumption of equal variance of classes is relaxed. However, it still assumes that features are drawn from multivariate Gaussian distribution and that p < n.
+\item \textbf{Naive Bayes} is a classifier based on Bayes' theorem. It has a strong asssumption of independence of features. We know this does not hold true in our data, and indeed, this classifier performed worst among all four. 
+\end{itemize}
+
+## Assessment of fit of Classifiers
+
+Classifier fit was assessed using k-fold cross-validation and the F1-score for evaluation. As the harmonic mean of precision and recall, the F1-score balances identifying clouds while not diminishing the value of the classifier by over application. With k set to five, we compared all of our classification models using both the label and block methods of training/ test splitting that were previously mentioned. Random forests are unmatched in their performance: their average score of 0.93 is 7% higher than the second best model. Still, there is no getting away from the fact that their structure necessitates a long amount of time to run. The other three predictors are much quicker, and among them QDA consistently outperforms both Logistic regression and Naive Bayes. If iteration or runtimes are critical, we would recommend QDA, but the best results are achieved with random forest. Results were consistent between both splitting techniques. Label splitting is faster and easier to implement than blocking, so is the one we recommend when using multiple datasets with uneven class distribution.
+
+```{r classifier_fit}
+accuracy_loss <- function(pred, actual){
+  return(mean(pred == actual))
+}
+
+precision_loss <- function(pred, actual){
+  return(sum(pred == actual & actual == 1)/sum(pred == 1))
+}
+
+recall_loss <- function(pred, actual){
+  return(sum(pred == actual & actual == 1)/sum(actual == 1))
+}
+
+f1_loss <- function(pred, actual){
+  p <- precision_loss(pred, actual)
+  r <- recall_loss(pred, actual)
+  return((2* p * r)/(p + r))
+}
+
+auc_loss <- function(pred, actual){
+  roc <- roc(actual, pred[, "1"])
+  plot(roc)
+  return(auc(roc))
+}
+
+CVBinaryClassifer <- function(classifier, features, labels, K, data, loss){
+  folds <- createFolds(data[,labels], k = K)
+  loss_vec <- c()
+  formula <- paste(paste(labels, "~"), paste(features, collapse = "+"))
+  
+  if (classifier == "logistic"){
+    for ( f in 1:length(folds) ){
+      model <- glm(formula, family = 'binomial', data = data[-folds[[f]], ])
+      pred_prob <- predict(model, data[folds[[f]], features])
+      pred <- ifelse(pred_prob > 0.5, 1, -1)
+      loss_vec[f] <- loss(pred, data[folds[[f]], labels])
+    }
+  }
+  
+  else if (classifier == "rf"){
+    for ( f in 1:length(folds) ){
+      model <- randomForest(as.formula(formula), data = data[-folds[[f]], ])
+      pred <- predict(model, data[folds[[f]], features])
+      pred_prod <- predict(model, data[folds[[f]], features], type = "prob")
+      loss_vec[f] = loss(pred, data[folds[[f]], labels])
+    }
+  }
+  
+  else if (classifier == "qda"){
+    for ( f in 1:length(folds) ){
+      model <- qda(as.formula(formula), data = data[-folds[[f]], ])
+      pred <- predict(model, data[folds[[f]], features])
+      pred_prod <- pred$posterior
+      pred <- pred$class
+      loss_vec[f] = loss(pred, data[folds[[f]], labels])
+    }
+  }
+  
+  else if (classifier == "nb"){
+    for ( f in 1:length(folds) ){
+      model <- NaiveBayes(as.formula(formula), data = data[-folds[[f]], ])
+      pred <- predict(model, data[folds[[f]], features])
+      pred_prod <- pred$posterior
+      pred <- pred$class
+      loss_vec[f] = loss(pred, data[folds[[f]], labels])
+    }
+  }
+  else{
+    print("Not a supported classifier")
+  }
+  loss_vec[K + 1] <- mean(loss_vec)
+  return(loss_vec)
+}
+
+
+models <- c('logistic', 'rf', 'qda', 'nb')
+features <- c('NDAI','SD','CORR','AN')
+
+# cv_list <- list()
+# for (m in 1:length(models)){
+#   cv_list[[m]] <- CVBinaryClassifer(models[m], features, 
+#                                     'label', 5, label_train, f1_loss)
+# }
+# 
+# label_df <- data.frame(c('CV1', 'CV2', 'CV3', 'CV4', 'CV5', 'Avg'), 
+#                        cv_list[[1]], cv_list[[2]], cv_list[[3]], cv_list[[4]])
+# colnames(label_df) <- c('Label/ Block', models)
+# 
+# for (m in 1:length(models)){
+#   cv_list[[m]] <- CVBinaryClassifer(models[m], features, 
+#                                     'label', 5, block_train, f1_loss)
+# }
+# 
+# block_df <- data.frame(c('CV1', 'CV2', 'CV3', 'CV4', 'CV5', 'Avg'), 
+#                        cv_list[[1]], cv_list[[2]], cv_list[[3]], cv_list[[4]])
+# colnames(block_df) <- c('Label/ Block', models)
+# 
+# df <- rbind(label_df, block_df)
+load('R/cvCompare.RData')
+knitr::kable(df, caption = 'Cross-Validation Comparison')
+```
+
+
+## The Best Classifier
+
+## Post-hoc EDA
+
+To study patterns in misclassification errors of random forest, we plotted all three images showing misclassified pixels along with correct ones on a map (see Figure \ref{fig:misclass}). As we can see, there are specific places where the classifier fails to classify pixels correctly. In image 1, at the bottom left majority of the non-cloud surface was misclassified, probably because it is in close proximity to clouds from both sides. The same misclassification occured in image 3. A small non-cloud surface was classified as cloud, since it is surrounded with cloud pixels from three sides. From this visual assessment, it seems that random forest classifies cloud pixels better than non-cloud pixels. However, we need to look at the quantitative evidence too. In order to do that, we calculated the percentage of misclassified units for each label. For images 1, 2 and 3, the percentage of misclassification for cloud pixels is 8.5, 0.8, and 10.7 respectively. Correspondingly, the percentage of misclassified pixels for non-cloud pixels is 4.7, 4.3, and 7.9 respectively. Across all images, the percentage of misclassification for cloud pixels is 5.36 and for non-cloud pixels is 5.41. The difference is minimal, therefore we do not believe that there is a difference in misclassification according to labels. In addition, the misclassification rate was lowest for image 2. This may be due to the low number of unlabeled pixels in this image. 
+Furthermore, we visually checked for patterns in misclassification errors based on ranges of feature values (Figure \ref{fig:box}). It appears, that the classifier tends to missclassify pixels with lower average radiance values from nadir camera and higher average NDAI values. 
+
+```{r misclass, fig.cap="Misclassified labels", fig.width=8}
+certain_images <- images %>%
+  filter(label != 0) %>%
+  droplevels()
+  #mutate(label = as.factor(label))
+  
+
+rf <- randomForest(label ~ NDAI + SD + CORR + AN, data = certain_images, ntree = 500)
+
+#get predicted classes
+preds <- predict(rf, data = certain_images[, features])
+
+#combine with the dataset
+pred_images <- cbind(certain_images, preds)
+colnames(pred_images)[15] <- "predicted_labels"
+
+# detect misclassification
+pred_images <- pred_images %>%
+  mutate(label = as.numeric(as.character(label))) %>%
+  mutate(predicted_labels = as.numeric(as.character(predicted_labels))) %>%
+  mutate(missclass = label + predicted_labels)
+
+# Plot the expert pixel-level classification of image 1
+p1 <- pred_images %>%
+  filter(image == "img1") %>%
+  ggplot() + 
+  geom_point(aes(x = x, y = y, color = factor(missclass))) + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border= element_blank(),
+        legend.text = element_text(size =10),
+        legend.title = element_text(size = 15))+
+  scale_color_manual(name = "Predicted label", 
+                     values = c("#3182bd", "red", "#deebf7"), 
+                     labels = c("Ice", "Misclassified", "Clouds"))
+
+# Plot the expert pixel-level classification of image 2
+p2 <- pred_images %>%
+  filter(image == "img2") %>%
+  ggplot() + 
+  geom_point(aes(x = x, y = y, color = factor(missclass))) + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border= element_blank(),
+        legend.text = element_text(size =10),
+        legend.title = element_text(size = 15))+
+  scale_color_manual(name = "Predicted label", 
+                     values = c("#3182bd", "red", "#deebf7"), 
+                     labels = c("Ice", "Misclassified", "Clouds"))
+
+# Plot the expert pixel-level classification of image 3
+p3 <- pred_images %>%
+  filter(image == "img3") %>%
+  ggplot() + 
+  geom_point(aes(x = x, y = y, color = factor(missclass))) + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border= element_blank(),
+        legend.text = element_text(size =10),
+        legend.title = element_text(size = 15))+
+  scale_color_manual(name = "Predicted label", 
+                     values = c("#3182bd", "red", "#deebf7"), 
+                     labels = c("Ice", "Misclassified", "Clouds"))
+
+ggarrange(p1, p2, p3, ncol = 3, nrow = 1, common.legend = TRUE) 
+```
+
+```{r percent}
+## summarizing data
+# image 1
+percentage1 <- pred_images %>%
+  filter(image == "img1") %>%
+  group_by(label, missclass) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+
+# image 2
+percentage2 <- pred_images %>%
+  filter(image == "img2") %>%
+  group_by(label, missclass) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+
+# image 3
+percentage3 <- pred_images %>%
+  filter(image == "img3") %>%
+  group_by(label, missclass) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+
+# overall
+percentage <- pred_images %>%
+  group_by(label, missclass) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+```
+
+```{r box, fig.cap="Misclassification based on feature values."}
+features <- c('NDAI','SD','CORR','AN')
+# give labels names
+pred_images$class <- "Correct"
+pred_images$class[pred_images$missclass == 3] <- "Incorrect"
+
+pred_images %>%
+  gather(features,
+         key = "Variable", value = "Value") %>%
+  ggplot() + 
+  geom_boxplot(aes(x = class, 
+                   y = Value,
+                   color= class)) + 
+  facet_wrap(Variable ~., 
+             scales = "free",
+             nrow = 2) +
+  theme_bw(base_size = 10) +
+  theme(
+    plot.title = element_text(size = rel(1.2)),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    axis.title.y = element_text(size = 12, face = "bold")
+  ) + 
+  labs(x = "") 
+```
+
+# Conclusion
