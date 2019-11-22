@@ -125,7 +125,7 @@ ggarrange(p1, p2, p3, ncol = 3, nrow = 1, common.legend = TRUE)
 
 As we can see from Figure \ref{fig:label_proportion}, image 2 has the most 1-label, while image 3 has the most 0-label (unlabeled), meaning that it contains the most unwanted data. For each image, there are no missing values. The typical IID assumption is broken in this case because the cloud appears in patches. This means that if one pixel is clssified as cloudy, then the surrounding pixels are also highly likely to be cloudy. This geographic property causes correlation structure among pixels, so we would need to properly compensate for this violation of IID assumtpion in the processing stage.
 
-```{r label_proportion, fig.cap="Proportion of Labels in Each Image"}
+```{r label_proportion, fig.cap="Proportion of Labels in Each Image", fig.height=3}
 ## summarizing data
 percentage_dat <- images %>%
   group_by(image, label) %>%
@@ -156,8 +156,8 @@ g3 <- percentage_dat %>%
   ylim(0,0.6) + 
   theme_bw()
   
-grid.arrange(g1, g2, g3, ncol = 3,
-             gp = gpar(fontsize = 16))
+grid.arrange(g1, g2, g3, ncol = 3)
+             #gp = gpar(fontsize = 16))
 ```
 
 
@@ -172,6 +172,11 @@ corrplot.mixed(cor(images[,c(-1, -2, -3, -12, -13)]))
 ```
 
 ```{r dist, fig.cap="Overlaying Distribution of Labels among Features"}
+# give labels names
+images$Labels <- "Cloud"
+images$Labels[images$label == -1] <- "Ice"
+images$Labels[images$label == 0] <- "Unknown"
+
 ## log transformation of SD b/c it is highly skewed
 images$logSD <- log(images$SD + 1)
 
@@ -180,32 +185,6 @@ features <- c('NDAI','logSD','CORR','DF','CF','BF','AF','AN')
 
 ## distribution plots
 images$label <- factor(images$label)
-images %>%
-  gather(features, 
-         key = "Variable", value = "Value") %>%
-  ggplot() + 
-  geom_density(aes(x = Value, group = label,
-                   color = label, fill = label), 
-             color = "black", alpha = .7) +
-  facet_wrap(Variable ~., 
-             scales = "free",
-             nrow = 2) +
-  theme_bw(base_size = 10) +
-  theme(
-    plot.title = element_text(size = rel(1.2)),
-    axis.title.x = element_text(size = 12, face = "bold"),
-    axis.title.y = element_text(size = 12, face = "bold")
-  ) + 
-  labs(x = "")
-```
-
-## This is a slight modified version of above plot with names given to labels and unknown removed from plot for clarity - Aya
-
-```{r}
-# give labels names
-images$Labels <- "Cloud"
-images$Labels[images$label == -1] <- "Ice"
-images$Labels[images$label == 0] <- "Unknown"
 
 images %>%
   filter(Labels != "Unknown") %>%
@@ -465,11 +444,11 @@ features <- c('NDAI','SD','CORR','AN')
 # colnames(block_df) <- c('Label/ Block', models)
 # 
 # df <- rbind(label_df, block_df)
-load('cvCompare.RData')
+
+load('other/cvCompare.RData')
 knitr::kable(df, caption = 'Cross-Validation Comparison')
 ```
 
-## Assessment of fit of Classifiers
 
 ## The Best Classifier
 
@@ -480,16 +459,18 @@ Furthermore, we visually checked for patterns in misclassification errors based 
 
 ```{r misclass, fig.cap="Misclassified labels", fig.width=8}
 certain_images <- images %>%
-  filter(label != 0)
+  filter(label != 0) %>%
+  mutate(label = as.factor(label))
+certain_images$label <- factor(certain_images$label)
 
-rf <- randomForest(label ~ NDAI + SD + CORR + AN, data = certain_images, ntree = 500)
+rf <- randomForest(label ~ NDAI + SD + CORR + AN, data = certain_images, ntree = 100)
 
 #get predicted classes
 preds <- predict(rf, data = certain_images)
 
 #combine with the dataset
 pred_images <- cbind(certain_images, as.matrix(preds))
-colnames(pred_images)[14] <- "predicted_labels"
+colnames(pred_images)[15] <- "predicted_labels"
 
 # detect misclassification
 pred_images <- pred_images %>%
