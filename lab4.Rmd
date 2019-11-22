@@ -475,4 +475,106 @@ knitr::kable(df, caption = 'Cross-Validation Comparison')
 
 ## Post-hoc EDA
 
+To study patterns in misclassification errors of random forest, we plotted all three images showing misclassified pixels along with correct ones on a map (see Figure \ref{fig:misclass}). As we can see, there are specific places where the classifier fails to classify pixels correctly. In image 1, at the bottom left majority of the non-cloud surface was misclassified, probably because it is in close proximity to clouds from both sides. The same misclassification occured in image 3. A small non-cloud surface was classified as cloud, since it is surrounded with cloud pixels from three sides. From this visual assessment, it seems that random forest classifies cloud pixels better than non-cloud pixels. However, we need to look at the quantitative evidence too. In order to do that, we calculated the percentage of misclassified units for each label. For images 1, 2 and 3, the percentage of misclassification for cloud pixels is 8.5, 0.8, and 10.7 respectively. Correspondingly, the percentage of misclassified pixels for non-cloud pixels is 4.7, 4.3, and 7.9 respectively. Across all images, the percentage of misclassification for cloud pixels is 5.36 and for non-cloud pixels is 5.41. The difference is minimal, therefore we do not believe that there is a difference in misclassification according to labels. In addition, the misclassification rate was lowest for image 2. This may be due to the low number of unlabeled pixels in this image. 
+
+```{r misclass, fig.cap="Misclassified labels", fig.width=8}
+certain_images <- images %>%
+  filter(label != 0)
+
+rf <- randomForest(label ~ NDAI + SD + CORR + AN, data = certain_images, ntree = 500)
+
+#get predicted classes
+preds <- predict(rf, data = certain_images)
+
+#combine with the dataset
+pred_images <- cbind(certain_images, as.matrix(preds))
+colnames(pred_images)[14] <- "predicted_labels"
+
+# detect misclassification
+pred_images <- pred_images %>%
+  mutate(label = as.integer(label)) %>%
+  mutate(predicted_labels = as.integer(predicted_labels)) %>%
+  mutate(missclass = label + predicted_labels)
+
+# Plot the expert pixel-level classification of image 1
+p1 <- pred_images %>%
+  filter(image == "img1") %>%
+  ggplot() + 
+  geom_point(aes(x = x, y = y, color = factor(missclass))) + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border= element_blank(),
+        legend.text = element_text(size =10),
+        legend.title = element_text(size = 15))+
+  scale_color_manual(name = "Predicted label", 
+                     values = c("#3182bd", "red", "#deebf7"), 
+                     labels = c("Ice", "Misclassified", "Clouds"))
+
+# Plot the expert pixel-level classification of image 2
+p2 <- pred_images %>%
+  filter(image == "img2") %>%
+  ggplot() + 
+  geom_point(aes(x = x, y = y, color = factor(missclass))) + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border= element_blank(),
+        legend.text = element_text(size =10),
+        legend.title = element_text(size = 15))+
+  scale_color_manual(name = "Predicted label", 
+                     values = c("#3182bd", "red", "#deebf7"), 
+                     labels = c("Ice", "Misclassified", "Clouds"))
+
+# Plot the expert pixel-level classification of image 3
+p3 <- pred_images %>%
+  filter(image == "img3") %>%
+  ggplot() + 
+  geom_point(aes(x = x, y = y, color = factor(missclass))) + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border= element_blank(),
+        legend.text = element_text(size =10),
+        legend.title = element_text(size = 15))+
+  scale_color_manual(name = "Predicted label", 
+                     values = c("#3182bd", "red", "#deebf7"), 
+                     labels = c("Ice", "Misclassified", "Clouds"))
+
+ggarrange(p1, p2, p3, ncol = 3, nrow = 1, common.legend = TRUE) 
+```
+
+```{r percent}
+## summarizing data
+# image 1
+percentage1 <- pred_images %>%
+  filter(image == "img1") %>%
+  group_by(label, missclass) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+
+# image 2
+percentage2 <- pred_images %>%
+  filter(image == "img2") %>%
+  group_by(label, missclass) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+
+# image 3
+percentage3 <- pred_images %>%
+  filter(image == "img3") %>%
+  group_by(label, missclass) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+
+# overall
+percentage <- pred_images %>%
+  group_by(label, missclass) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+```
+
 # Conclusion
